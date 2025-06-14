@@ -9,5 +9,5 @@ services:
         value: production
       
       - key: FRONTEND_URL
-        value: https://bg-remover.vercel.app  # Your real frontend URL
+        value: https://bg-remover-frontend.vercel.app  # Your real frontend URL
     autoDeploy: true  #
