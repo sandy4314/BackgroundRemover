@@ -10,3 +10,4 @@ services:
       
       - key: FRONTEND_URL
         value: https://bg-remover.vercel.app  # Your real frontend URL
+    autoDeploy: true  #
