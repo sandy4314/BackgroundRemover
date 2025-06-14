@@ -1,15 +1,12 @@
 services:
   - type: web
-    name: profile-photo-styler-backend
+    name: bg-remover-backend
     env: node
-    buildCommand: npm install
-    startCommand: node server.js
+    buildCommand: cd backend && npm install
+    startCommand: cd backend && node server.js
     envVars:
       - key: NODE_ENV
         value: production
+      
       - key: FRONTEND_URL
-        value: https://your-frontend-url.vercel.app
-    disk:
-      name: data
-      mountPath: /var/data
-      sizeGB: 1
+        value: https://bg-remover.vercel.app  # Your real frontend URL
