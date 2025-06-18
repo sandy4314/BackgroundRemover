@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
 import axios from "axios";
 
 const colors = ["#f8b400", "#00b894", "#6c5ce7", "#d63031", "#0984e3", "#e84393"];
@@ -8,20 +8,30 @@ function App() {
   const [preview, setPreview] = useState(null);
   const [bgColor, setBgColor] = useState(colors[0]);
   const [result, setResult] = useState(null);
+  const [resultUrl, setResultUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [imageUrl, setImageUrl] = useState("");
+  const [activeTab, setActiveTab] = useState("upload");
+  const [progress, setProgress] = useState(0);
+
+  const resetState = useCallback(() => {
+    setResult(null);
+    setResultUrl(null);
+    setError(null);
+    setProgress(0);
+  }, []);
 
   const onFileChange = (e) => {
+    resetState();
     const f = e.target.files[0];
     if (!f) return;
     
-    // Validate file type
     if (!f.type.match("image.*")) {
       setError("Please select an image file (JPEG, PNG, etc.)");
       return;
     }
     
-    // Validate file size (5MB max)
     if (f.size > 5 * 1024 * 1024) {
       setError("File size should be less than 5MB");
       return;
@@ -29,327 +39,522 @@ function App() {
     
     setFile(f);
     setPreview(URL.createObjectURL(f));
-    setResult(null);
-    setError(null);
   };
 
-  const handleUpload = async () => {
-    if (!file) {
-      setError("Please select an image");
+  const handleUrlSubmit = async () => {
+    resetState();
+    if (!imageUrl) {
+      setError("Please enter an image URL");
       return;
     }
-    
-    setLoading(true);
-    setError(null);
-    
-    const formData = new FormData();
-    formData.append("photo", file);
-    formData.append("color", bgColor);
 
     try {
-      const res = await axios.post("http://localhost:5000/upload", formData, {
-        headers: {
-          "Content-Type": "multipart/form-data"
-        }
-      });
-      setResult(res.data.final);
+      new URL(imageUrl); // Validate URL format
+    } catch (e) {
+      setError("Please enter a valid URL");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // Quick check if URL points to an image
+      const response = await axios.head(imageUrl, { timeout: 5000 });
+      if (!response.headers["content-type"]?.startsWith("image/")) {
+        throw new Error("URL does not point to a valid image");
+      }
+      setPreview(imageUrl);
+      setFile(null);
     } catch (err) {
-      setError(err.response?.data?.message || "Image processing failed. Please try again.");
-      console.error("Upload error:", err);
+      setError(err.message || "Failed to load image from URL");
     } finally {
       setLoading(false);
     }
   };
 
-  return (
-    <div
-      style={{
-        maxWidth: "90%",
-        width: "100%",
-        margin: "2rem auto",
-        padding: "1.5rem",
-        textAlign: "center",
-        fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-        borderRadius: "12px",
-        boxShadow: "0 4px 20px rgba(0,0,0,0.08)",
-        backgroundColor: "#ffffff"
-      }}
-    >
-      <h2 style={{ 
-        marginBottom: "1.5rem",
-        color: "#2d3436",
-        fontSize: "clamp(1.5rem, 4vw, 2rem)",
-        fontWeight: 600
-      }}>
-        Profile Photo Styler
-      </h2>
+  const handleUpload = async () => {
+    if (!preview) {
+      setError("Please select an image or provide a URL");
+      return;
+    }
+    
+    resetState();
+    setLoading(true);
+    
+    const formData = new FormData();
+    if (file) {
+      formData.append("photo", file);
+    } else {
+      formData.append("photo_url", imageUrl);
+    }
+    formData.append("color", bgColor);
 
-      {/* Image upload circle */}
-      <div style={{ marginBottom: "1.5rem" }}>
-        <label
-          htmlFor="fileInput"
-          style={{
-            display: "inline-block",
-            width: "clamp(120px, 30vw, 180px)",
-            height: "clamp(120px, 30vw, 180px)",
-            borderRadius: "50%",
-            border: `2px dashed ${error ? "#ff7675" : "#dfe6e9"}`,
-            cursor: "pointer",
-            overflow: "hidden",
-            position: "relative",
-            backgroundColor: "#f8f9fa",
-            boxShadow: "0 2px 10px rgba(0,0,0,0.05)",
-            transition: "all 0.3s ease"
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.borderColor = error ? "#ff7675" : "#74b9ff";
-            e.currentTarget.style.transform = "scale(1.02)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.borderColor = error ? "#ff7675" : "#dfe6e9";
-            e.currentTarget.style.transform = "scale(1)";
-          }}
-          title="Click to select image"
+    try {
+      const res = await axios.post("http://localhost:5000/upload", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+        onUploadProgress: (progressEvent) => {
+          const percentCompleted = Math.round(
+            (progressEvent.loaded * 100) / progressEvent.total
+          );
+          setProgress(percentCompleted);
+        }
+      });
+      
+      setResult(res.data.base64);
+      setResultUrl(res.data.url);
+    } catch (err) {
+      setError(err.response?.data?.error || "Image processing failed");
+      console.error("Upload error:", err);
+    } finally {
+      setLoading(false);
+      setProgress(0);
+    }
+  };
+
+  return (
+    <div className="app-container">
+      <h2>Profile Photo Styler</h2>
+
+      {/* Tab selector */}
+      <div className="tab-selector">
+        <button
+          onClick={() => setActiveTab("upload")}
+          className={activeTab === "upload" ? "active" : ""}
         >
-          {preview ? (
-            <img
-              src={preview}
-              alt="Preview"
-              style={{ 
-                width: "100%", 
-                height: "100%", 
-                objectFit: "cover",
-                filter: loading ? "grayscale(50%)" : "none",
-                opacity: loading ? 0.8 : 1
-              }}
-            />
-          ) : (
-            <div
-              style={{
-                position: "absolute",
-                top: "50%",
-                left: "50%",
-                transform: "translate(-50%, -50%)",
-                color: error ? "#ff7675" : "#b2bec3",
-                fontSize: "clamp(0.9rem, 3vw, 1.1rem)",
-                userSelect: "none",
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                gap: "0.5rem"
-              }}
-            >
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                <polyline points="17 8 12 3 7 8"></polyline>
-                <line x1="12" y1="3" x2="12" y2="15"></line>
-              </svg>
-              Upload Photo
-            </div>
-          )}
-          <input
-            id="fileInput"
-            type="file"
-            accept="image/*"
-            onChange={onFileChange}
-            style={{ display: "none" }}
-            disabled={loading}
-          />
-        </label>
-        {error && (
-          <p style={{ 
-            color: "#ff7675", 
-            fontSize: "0.9rem",
-            marginTop: "0.5rem"
-          }}>
-            {error}
-          </p>
-        )}
+          Upload Image
+        </button>
+        <button
+          onClick={() => setActiveTab("url")}
+          className={activeTab === "url" ? "active" : ""}
+        >
+          Paste URL
+        </button>
       </div>
 
-      {/* Background color options */}
-      <div style={{ marginBottom: "2rem" }}>
-        <h3 style={{ 
-          marginBottom: "1rem",
-          color: "#636e72",
-          fontSize: "1.1rem",
-          fontWeight: 500
-        }}>
-          Choose Background Color
-        </h3>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            gap: "0.8rem",
-            flexWrap: "wrap",
-            maxWidth: "400px",
-            margin: "0 auto"
-          }}
-        >
-          {colors.map((color) => (
-            <label
-              key={color}
-              style={{
-                cursor: "pointer",
-                display: "inline-block"
-              }}
-              title={`Set background color ${color}`}
+      {/* Image upload or URL input */}
+      {activeTab === "upload" ? (
+        <div className="upload-section">
+          <label htmlFor="fileInput" className={`upload-area ${error ? "error" : ""}`}>
+            {preview ? (
+              <img src={preview} alt="Preview" className="preview-image" />
+            ) : (
+              <div className="upload-prompt">
+                <UploadIcon />
+                <span>Upload Photo</span>
+              </div>
+            )}
+            <input
+              id="fileInput"
+              type="file"
+              accept="image/*"
+              onChange={onFileChange}
+              disabled={loading}
+            />
+          </label>
+          {error && <p className="error-message">{error}</p>}
+        </div>
+      ) : (
+        <div className="url-section">
+          <div className="url-input-container">
+            <input
+              type="text"
+              value={imageUrl}
+              onChange={(e) => setImageUrl(e.target.value)}
+              placeholder="Paste image URL here"
+              disabled={loading}
+            />
+            <button
+              onClick={handleUrlSubmit}
+              disabled={!imageUrl || loading}
             >
+              {loading ? "Loading..." : "Use URL"}
+            </button>
+          </div>
+          {preview && (
+            <div className="url-preview">
+              <img src={preview} alt="URL Preview" />
+            </div>
+          )}
+          {error && <p className="error-message">{error}</p>}
+        </div>
+      )}
+
+      {/* Background color options */}
+      <div className="color-picker">
+        <h3>Choose Background Color</h3>
+        <div className="color-options">
+          {colors.map((color) => (
+            <label key={color} title={`Set background color ${color}`}>
               <input
                 type="radio"
                 name="bg"
                 value={color}
                 checked={bgColor === color}
                 onChange={() => setBgColor(color)}
-                style={{ display: "none" }}
                 disabled={loading}
               />
-              <div
-                style={{
-                  width: "clamp(36px, 8vw, 48px)",
-                  height: "clamp(36px, 8vw, 48px)",
-                  borderRadius: "50%",
-                  backgroundColor: color,
-                  border: bgColor === color ? "3px solid #2d3436" : "2px solid #dfe6e9",
-                  boxShadow: bgColor === color ? "0 0 0 2px #ffffff, 0 0 0 4px #74b9ff" : "none",
-                  transition: "all 0.2s ease",
-                  transform: bgColor === color ? "scale(1.1)" : "scale(1)"
-                }}
-              />
+              <div className="color-circle" style={{ backgroundColor: color }} />
             </label>
           ))}
         </div>
       </div>
 
-      {/* Upload button */}
-      <button
-        onClick={handleUpload}
-        disabled={!file || loading}
-        style={{
-          padding: "0.8rem 2rem",
-          fontSize: "1rem",
-          backgroundColor: loading ? "#b2bec3" : "#6c5ce7",
-          color: "#ffffff",
-          border: "none",
-          borderRadius: "50px",
-          cursor: file && !loading ? "pointer" : "not-allowed",
-          boxShadow: file && !loading ? "0 4px 14px rgba(108, 92, 231, 0.3)" : "none",
-          transition: "all 0.3s ease",
-          fontWeight: 500,
-          letterSpacing: "0.5px",
-          position: "relative",
-          overflow: "hidden",
-          minWidth: "150px"
-        }}
-        onMouseEnter={(e) => {
-          if (!loading && file) {
-            e.currentTarget.style.backgroundColor = "#5941e0";
-            e.currentTarget.style.transform = "translateY(-2px)";
-          }
-        }}
-        onMouseLeave={(e) => {
-          if (!loading && file) {
-            e.currentTarget.style.backgroundColor = "#6c5ce7";
-            e.currentTarget.style.transform = "translateY(0)";
-          }
-        }}
-      >
-        {loading ? (
-          <>
-            <span style={{ position: "relative", zIndex: 1 }}>Processing...</span>
-            <span style={{
-              position: "absolute",
-              top: 0,
-              left: 0,
-              width: "100%",
-              height: "100%",
-              background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent)",
-              animation: "shimmer 1.5s infinite",
-              zIndex: 0
-            }}></span>
-          </>
-        ) : "Style My Photo"}
-      </button>
-
-      {/* Processed image result */}
-      {result && (
-        <div style={{ 
-          marginTop: "2.5rem",
-          paddingTop: "2rem",
-          borderTop: "1px solid #f1f1f1"
-        }}>
-          <h3 style={{
-            marginBottom: "1rem",
-            color: "#2d3436",
-            fontSize: "1.2rem"
-          }}>
-            Your Styled Photo
-          </h3>
-          <div style={{
-            display: "inline-block",
-            padding: "0.5rem",
-            borderRadius: "16px",
-            backgroundColor: "#ffffff",
-            boxShadow: "0 6px 20px rgba(0,0,0,0.1)",
-            border: "1px solid #f1f1f1"
-          }}>
-            <img
-              src={result}
-              alt="Processed"
-              style={{
-                width: "clamp(160px, 40vw, 220px)",
-                height: "clamp(160px, 40vw, 220px)",
-                borderRadius: "12px",
-                objectFit: "cover",
-                transition: "all 0.3s ease"
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.transform = "scale(1.03)";
-                e.currentTarget.style.boxShadow = "0 8px 25px rgba(0,0,0,0.15)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.transform = "scale(1)";
-                e.currentTarget.style.boxShadow = "none";
-              }}
-            />
+      {/* Upload button with progress */}
+      <div className="upload-button-container">
+        <button
+          onClick={handleUpload}
+          disabled={!preview || loading}
+          className="upload-button"
+        >
+          {loading ? `Processing... ${progress}%` : "Style My Photo"}
+        </button>
+        {loading && (
+          <div className="progress-bar">
+            <div style={{ width: `${progress}%` }} />
           </div>
-          <div style={{ marginTop: "1.5rem" }}>
-            <a
-              href={result}
-              download="styled-profile-photo.png"
-              style={{
-                display: "inline-block",
-                padding: "0.6rem 1.5rem",
-                backgroundColor: "#00b894",
-                color: "white",
-                borderRadius: "6px",
-                textDecoration: "none",
-                fontWeight: 500,
-                transition: "all 0.2s ease",
-                fontSize: "0.9rem"
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = "#00a884";
-                e.currentTarget.style.transform = "translateY(-1px)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = "#00b894";
-                e.currentTarget.style.transform = "translateY(0)";
-              }}
-            >
-              Download Photo
-            </a>
+        )}
+      </div>
+
+      {/* Results section */}
+      {result && (
+        <div className="results-section">
+          <h3>Your Styled Photo</h3>
+          <div className="results-container">
+            <div className="image-result">
+              <img src={result} alt="Processed" />
+            </div>
+            <div className="url-result">
+              <h4>Permanent URL:</h4>
+              <div className="url-display">{resultUrl}</div>
+              <div className="action-buttons">
+                <a
+                  href={result}
+                  download="styled-profile-photo.png"
+                  className="download-button"
+                >
+                  Download Photo
+                </a>
+                {resultUrl && (
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(resultUrl);
+                      alert("URL copied to clipboard!");
+                    }}
+                    className="copy-button"
+                  >
+                    Copy URL
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Global styles */}
-      <style>{`
+      {/* CSS Styles */}
+      <style jsx>{`
+        .app-container {
+          max-width: 90%;
+          width: 100%;
+          margin: 2rem auto;
+          padding: 1.5rem;
+          text-align: center;
+          font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          border-radius: 12px;
+          box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+          background-color: #ffffff;
+        }
+        
+        h2 {
+          margin-bottom: 1.5rem;
+          color: #2d3436;
+          font-size: clamp(1.5rem, 4vw, 2rem);
+          font-weight: 600;
+        }
+        
+        .tab-selector {
+          display: flex;
+          justify-content: center;
+          margin-bottom: 1.5rem;
+          border-bottom: 1px solid #dfe6e9;
+          padding-bottom: 0.5rem;
+        }
+        
+        .tab-selector button {
+          padding: 0.5rem 1.5rem;
+          background-color: transparent;
+          color: #636e72;
+          border: none;
+          border-radius: 6px 6px 0 0;
+          cursor: pointer;
+          font-weight: 500;
+          transition: all 0.2s ease;
+        }
+        
+        .tab-selector button.active {
+          background-color: #6c5ce7;
+          color: white;
+        }
+        
+        .upload-area {
+          display: inline-block;
+          width: clamp(120px, 30vw, 180px);
+          height: clamp(120px, 30vw, 180px);
+          border-radius: 50%;
+          border: 2px dashed #dfe6e9;
+          cursor: pointer;
+          overflow: hidden;
+          position: relative;
+          background-color: #f8f9fa;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+          transition: all 0.3s ease;
+        }
+        
+        .upload-area.error {
+          border-color: #ff7675;
+        }
+        
+        .upload-area:hover {
+          border-color: #74b9ff;
+          transform: scale(1.02);
+        }
+        
+        .preview-image {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          filter: grayscale(50%);
+          opacity: 0.8;
+        }
+        
+        .upload-prompt {
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          color: #b2bec3;
+          font-size: clamp(0.9rem, 3vw, 1.1rem);
+          user-select: none;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 0.5rem;
+        }
+        
+        .error-message {
+          color: #ff7675;
+          font-size: 0.9rem;
+          margin-top: 0.5rem;
+        }
+        
+        .url-input-container {
+          display: flex;
+          justify-content: center;
+          gap: 0.5rem;
+          margin-bottom: 1rem;
+        }
+        
+        .url-input-container input {
+          padding: 0.8rem 1rem;
+          border-radius: 8px;
+          border: 1px solid #dfe6e9;
+          width: clamp(200px, 70vw, 400px);
+          font-size: 0.9rem;
+          transition: all 0.2s ease;
+          outline: none;
+        }
+        
+        .url-input-container input:focus {
+          border-color: #74b9ff;
+          box-shadow: 0 0 0 2px rgba(116, 185, 255, 0.2);
+        }
+        
+        .url-preview {
+          width: clamp(120px, 30vw, 180px);
+          height: clamp(120px, 30vw, 180px);
+          border-radius: 50%;
+          margin: 0 auto;
+          overflow: hidden;
+          border: 2px solid #dfe6e9;
+        }
+        
+        .url-preview img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+        
+        .color-picker {
+          margin-bottom: 2rem;
+        }
+        
+        .color-picker h3 {
+          margin-bottom: 1rem;
+          color: #636e72;
+          font-size: 1.1rem;
+          font-weight: 500;
+        }
+        
+        .color-options {
+          display: flex;
+          justify-content: center;
+          gap: 0.8rem;
+          flex-wrap: wrap;
+          max-width: 400px;
+          margin: 0 auto;
+        }
+        
+        .color-circle {
+          width: clamp(36px, 8vw, 48px);
+          height: clamp(36px, 8vw, 48px);
+          border-radius: 50%;
+          border: 2px solid #dfe6e9;
+          transition: all 0.2s ease;
+          cursor: pointer;
+        }
+        
+        input[type="radio"]:checked + .color-circle {
+          border: 3px solid #2d3436;
+          box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #74b9ff;
+          transform: scale(1.1);
+        }
+        
+        .upload-button-container {
+          margin-bottom: 1rem;
+          width: 100%;
+        }
+        
+        .upload-button {
+          padding: 0.8rem 2rem;
+          font-size: 1rem;
+          background-color: #6c5ce7;
+          color: #ffffff;
+          border: none;
+          border-radius: 50px;
+          cursor: pointer;
+          box-shadow: 0 4px 14px rgba(108, 92, 231, 0.3);
+          transition: all 0.3s ease;
+          font-weight: 500;
+          letter-spacing: 0.5px;
+          position: relative;
+          overflow: hidden;
+          min-width: 150px;
+        }
+        
+        .upload-button:hover:not(:disabled) {
+          background-color: #5941e0;
+          transform: translateY(-2px);
+        }
+        
+        .upload-button:disabled {
+          background-color: #b2bec3;
+          box-shadow: none;
+          cursor: not-allowed;
+          opacity: 0.7;
+        }
+        
+        .progress-bar {
+          width: 100%;
+          height: 4px;
+          background-color: #dfe6e9;
+          margin-top: 0.5rem;
+          border-radius: 2px;
+        }
+        
+        .progress-bar div {
+          height: 100%;
+          background-color: #6c5ce7;
+          border-radius: 2px;
+          transition: width 0.3s ease;
+        }
+        
+        .results-section {
+          margin-top: 2.5rem;
+          padding-top: 2rem;
+          border-top: 1px solid #f1f1f1;
+        }
+        
+        .results-container {
+          display: flex;
+          justify-content: center;
+          gap: 2rem;
+          flex-wrap: wrap;
+        }
+        
+        .image-result {
+          padding: 0.5rem;
+          border-radius: 16px;
+          background-color: #ffffff;
+          box-shadow: 0 6px 20px rgba(0,0,0,0.1);
+          border: 1px solid #f1f1f1;
+        }
+        
+        .image-result img {
+          width: clamp(160px, 40vw, 220px);
+          height: clamp(160px, 40vw, 220px);
+          border-radius: 12px;
+          object-fit: cover;
+          transition: all 0.3s ease;
+        }
+        
+        .image-result img:hover {
+          transform: scale(1.03);
+          box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        }
+        
+        .url-result {
+          max-width: 400px;
+          text-align: left;
+        }
+        
+        .url-display {
+          background-color: #f8f9fa;
+          padding: 1rem;
+          border-radius: 8px;
+          word-break: break-all;
+        }
+        
+        .action-buttons {
+          margin-top: 1.5rem;
+          display: flex;
+          gap: 0.5rem;
+          flex-wrap: wrap;
+        }
+        
+        .download-button, .copy-button {
+          padding: 0.6rem 1.5rem;
+          color: white;
+          border-radius: 6px;
+          font-weight: 500;
+          transition: all 0.2s ease;
+          font-size: 0.9rem;
+          text-decoration: none;
+          border: none;
+          cursor: pointer;
+        }
+        
+        .download-button {
+          background-color: #00b894;
+        }
+        
+        .download-button:hover {
+          background-color: #00a884;
+          transform: translateY(-1px);
+        }
+        
+        .copy-button {
+          background-color: #0984e3;
+        }
+        
+        .copy-button:hover {
+          background-color: #0878d1;
+          transform: translateY(-1px);
+        }
+        
         @keyframes shimmer {
           0% { transform: translateX(-100%); }
           100% { transform: translateX(100%); }
         }
+        
         body {
           background-color: #f8f9fa;
           margin: 0;
@@ -358,11 +563,19 @@ function App() {
           display: flex;
           align-items: center;
         }
-        button:disabled {
-          opacity: 0.7;
-        }
       `}</style>
     </div>
+  );
+}
+
+// Simple upload icon component
+function UploadIcon() {
+  return (
+    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+      <polyline points="17 8 12 3 7 8"></polyline>
+      <line x1="12" y1="3" x2="12" y2="15"></line>
+    </svg>
   );
 }
 

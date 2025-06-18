@@ -1,94 +1,142 @@
-const express = require("express");
-const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
-const { exec } = require("child_process");
-const cors = require("cors");
-const Jimp = require("jimp");
+const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const { exec } = require('child_process');
+const cors = require('cors');
+const Jimp = require('jimp');
+const axios = require('axios');
+
 const app = express();
 
-// Environment configuration
-require('dotenv').config();
-const isProduction = process.env.NODE_ENV === 'production';
-
-// CORS configuration
-const corsOptions = {
-  origin: isProduction 
-    ? process.env.FRONTEND_URL 
-    : 'http://localhost:3000',
-  optionsSuccessStatus: 200
-};
-app.use(cors(corsOptions));
+// Basic CORS configuration for local development
+app.use(cors({
+  origin: 'http://localhost:5173',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type'],
+  credentials: true
+}));
 
 // Middleware
-app.use(express.json());
+app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
-// Create directories if they don't exist
-if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
-if (!fs.existsSync("processed")) fs.mkdirSync("processed");
+// Setup directories
+const ensureDirectoryExists = (dir) => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+};
+ensureDirectoryExists(path.join(__dirname, 'uploads'));
+ensureDirectoryExists(path.join(__dirname, 'processed'));
 
-const upload = multer({ 
-  dest: "uploads/",
-  limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB limit
+// Multer configuration
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, path.join(__dirname, 'uploads'));
+  },
+  filename: (req, file, cb) => {
+    cb(null, `${Date.now()}-${file.originalname}`);
   }
 });
 
-// Upload endpoint
-app.post("/upload", upload.single("photo"), async (req, res) => {
-  try {
-    const file = req.file;
-    const bgColor = req.body.color || "#ffffff";
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB
+});
 
-    if (!file) {
-      return res.status(400).json({ error: "No file uploaded" });
+// Process image function
+const processImage = async (inputPath, bgColor, filename) => {
+  const outputPath = path.join(__dirname, 'processed', `${filename}-nobg.png`);
+  const finalPath = path.join(__dirname, 'processed', `${filename}-final.png`);
+
+  // Remove background
+  await new Promise((resolve, reject) => {
+    const process = exec(`rembg i "${inputPath}" "${outputPath}"`, (err) => {
+      if (err) return reject(new Error('Background removal failed'));
+      resolve();
+    });
+
+    setTimeout(() => {
+      process.kill();
+      reject(new Error('Background removal timed out'));
+    }, 30000);
+  });
+
+  // Apply new background color
+  const image = await Jimp.read(outputPath);
+  const bg = new Jimp(image.bitmap.width, image.bitmap.height, bgColor);
+  bg.composite(image, 0, 0);
+  await bg.writeAsync(finalPath);
+
+  const base64 = await fs.promises.readFile(finalPath, { encoding: 'base64' });
+  
+  return {
+    base64: `data:image/png;base64,${base64}`,
+    url: `http://localhost:5000/processed/${path.basename(finalPath)}`
+  };
+};
+
+// Serve processed files
+app.use('/processed', express.static(path.join(__dirname, 'processed')));
+
+// Upload endpoint
+app.post('/upload', upload.single('photo'), async (req, res) => {
+  try {
+    if (!req.file && !req.body.photo_url) {
+      return res.status(400).json({ error: 'No image provided' });
     }
 
-    const inputPath = file.path;
-    const outputPath = `processed/${file.filename}_nobg.png`;
-    const finalPath = `processed/${file.filename}_final.png`;
+    const bgColor = req.body.color || '#ffffff';
+    let inputPath, filename;
 
-    // Background removal
-    exec(`rembg i ${inputPath} ${outputPath}`, async (err) => {
-      if (err) {
-        console.error("Background removal failed", err);
-        return res.status(500).json({ error: "Background removal failed" });
-      }
-
+    if (req.file) {
+      inputPath = req.file.path;
+      filename = path.parse(req.file.filename).name;
+    } else {
       try {
-        const fg = await Jimp.read(outputPath);
-        const bg = new Jimp(fg.bitmap.width, fg.bitmap.height, bgColor);
-        bg.composite(fg, 0, 0);
-
-        await bg.writeAsync(finalPath);
-
-        const base64 = await fs.promises.readFile(finalPath, { encoding: "base64" });
-
-        // Clean up temporary files
-        if (isProduction) {
-          fs.unlinkSync(inputPath);
-          fs.unlinkSync(outputPath);
-          fs.unlinkSync(finalPath);
-        }
-
-        res.json({
-          final: `data:image/png;base64,${base64}`,
-        });
+        new URL(req.body.photo_url);
       } catch (e) {
-        console.error("Image processing error", e);
-        res.status(500).json({ error: "Image composition failed" });
+        return res.status(400).json({ error: 'Invalid URL format' });
       }
-    });
+
+      const response = await axios({
+        method: 'get',
+        url: req.body.photo_url,
+        responseType: 'arraybuffer',
+        timeout: 10000
+      });
+
+      if (!response.headers['content-type']?.startsWith('image/')) {
+        return res.status(400).json({ error: 'URL does not point to a valid image' });
+      }
+
+      filename = `url-${Date.now()}`;
+      inputPath = path.join(__dirname, 'uploads', `${filename}.tmp`);
+      await fs.promises.writeFile(inputPath, response.data);
+    }
+
+    const result = await processImage(inputPath, bgColor, filename);
+    res.json(result);
   } catch (error) {
-    console.error("Server error:", error);
-    res.status(500).json({ error: "Internal server error" });
+    console.error('Error:', error);
+    res.status(500).json({ error: error.message || 'Image processing failed' });
   }
 });
 
 // Health check endpoint
-app.get("/health", (req, res) => {
-  res.status(200).json({ status: "healthy" });
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+// Start server
+const PORT = 5000;
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+  console.log('Uploads directory:', path.join(__dirname, 'uploads'));
+  console.log('Processed directory:', path.join(__dirname, 'processed'));
+});
+
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled rejection:', err);
+});
