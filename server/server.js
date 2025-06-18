@@ -7,7 +7,6 @@ const cors = require('cors');
 const Jimp = require('jimp');
 const axios = require('axios');
 
-const cors = require("cors");
 
 const allowedOrigins = [
   "http://localhost:5173", // local dev
