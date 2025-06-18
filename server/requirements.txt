@@ -1,1 +1,1 @@
-rembg
+rembg[cpu,cli]
