@@ -1,16 +1,11 @@
 {
   "name": "server",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "@xixiyahaha/rembg-node": "^2.2.0",
     "axios": "^1.10.0",
     "child_process": "^1.0.2",
     "cors": "^2.8.5",
@@ -24,8 +19,6 @@
     "nodemon": "^3.1.10",
     "path": "^0.12.7",
     "react-image-crop": "^11.0.10",
-    "rembg-node": "^2.0.2",
     "sharp": "^0.33.5"
-  },
-  "description": ""
+  }
 }
